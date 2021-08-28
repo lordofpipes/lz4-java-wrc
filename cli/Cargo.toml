@@ -1,0 +1,23 @@
+[package]
+name = "cli"
+publish = false
+version = "0.1.0"
+edition = "2018"
+authors = ["Alexandre Blazart <alexandre@blazart.fr>"]
+description = """
+A compression tool which implements the LZ4BlockOutputStream format from https://github.com/lz4/lz4-java.
+This is not compatible with the standard LZ4 Block format.
+"""
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+atty = "0.2"
+clap = "2"
+
+[dependencies.lz4jb]
+path = ".."
+
+[[bin]]
+name = "lz4jb"
+path = "src/main.rs"

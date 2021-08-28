@@ -1,0 +1,21 @@
+[package]
+name = "lz4jb"
+version = "0.1.0"
+edition = "2018"
+authors = ["Alexandre Blazart <alexandre@blazart.fr>"]
+readme = "README.md"
+license = "MIT"
+keywords = ["lz4"]
+categories = ["compression"]
+repository = "https://github.com/trazfr/lz4jb"
+homepage = "https://github.com/trazfr/lz4jb"
+description = """
+A Rust implementation of the LZ4BlockOutputStream format from https://github.com/lz4/lz4-java.
+This is not compatible with the standard LZ4 Block format.
+"""
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lz4_flex = { version = "0.8", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+twox-hash = { version = "1", default-features = false }
