@@ -1,7 +1,12 @@
-use lz4_flex::block::{CompressError as Lz4CompressError, DecompressError as Lz4DecompressError};
-pub(crate) use std::io::{Error as IoError, ErrorKind as IoErrorKind};
-pub(crate) type Result<T> = std::result::Result<T, Error>;
+#[cfg(feature = "lz4_flex")]
+use lz4_flex::block::{
+    CompressError as Lz4FlexCompressError, DecompressError as Lz4FlexDecompressError,
+};
 
+use std::error::Error as StdError;
+pub(crate) use std::io::{Error as IoError, ErrorKind as IoErrorKind};
+use std::result::Result as StdResult;
+pub(crate) type Result<T> = StdResult<T, Error>;
 use std::fmt;
 
 // ErrorInternal
@@ -11,11 +16,11 @@ pub(crate) struct ErrorInternal {
     description: &'static str,
 }
 impl ErrorInternal {
-    pub(crate) fn new<E: From<Self>>(description: &'static str) -> E {
-        Self {
-            description: description,
-        }
-        .into()
+    pub(crate) fn new(description: &'static str) -> Self {
+        Self { description }
+    }
+    pub(crate) fn new_error<R, E: From<Self>>(description: &'static str) -> StdResult<R, E> {
+        Err(Self::new(description).into())
     }
 }
 impl fmt::Display for ErrorInternal {
@@ -30,8 +35,11 @@ impl std::error::Error for ErrorInternal {}
 #[derive(Debug)]
 pub(crate) struct ErrorCorruptedStream {}
 impl ErrorCorruptedStream {
-    pub(crate) fn new<E: From<Self>>() -> E {
-        Self {}.into()
+    pub(crate) fn new() -> Self {
+        Self {}
+    }
+    pub(crate) fn new_error<R, E: From<Self>>() -> StdResult<R, E> {
+        Err(Self::new().into())
     }
 }
 impl fmt::Display for ErrorCorruptedStream {
@@ -55,13 +63,19 @@ pub(crate) struct ErrorWrongBlockSize {
     max_size: usize,
 }
 impl ErrorWrongBlockSize {
-    pub(crate) fn new<E: From<Self>>(size: usize, min_size: usize, max_size: usize) -> E {
+    pub(crate) fn new(size: usize, min_size: usize, max_size: usize) -> Self {
         Self {
-            size: size,
-            min_size: min_size,
-            max_size: max_size,
+            size,
+            min_size,
+            max_size,
         }
-        .into()
+    }
+    pub(crate) fn new_error<R, E: From<Self>>(
+        size: usize,
+        min_size: usize,
+        max_size: usize,
+    ) -> StdResult<R, E> {
+        Err(Self::new(size, min_size, max_size).into())
     }
 }
 impl fmt::Display for ErrorWrongBlockSize {
@@ -80,6 +94,60 @@ impl From<ErrorWrongBlockSize> for IoError {
     }
 }
 
+// Lz4Flex
+
+#[derive(Debug)]
+pub enum Lz4Error {
+    #[cfg(feature = "lz4_flex")]
+    Lz4FlexCompressError(Lz4FlexCompressError),
+    #[cfg(feature = "lz4_flex")]
+    Lz4FlexDecompressError(Lz4FlexDecompressError),
+    #[cfg(feature = "lz4-sys")]
+    Lz4SysCompressError,
+    #[cfg(feature = "lz4-sys")]
+    Lz4SysDecompressError,
+}
+impl fmt::Display for Lz4Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            #[cfg(feature = "lz4_flex")]
+            Self::Lz4FlexCompressError(e) => write!(f, "lz4_flex compression failed: {}", e),
+            #[cfg(feature = "lz4_flex")]
+            Self::Lz4FlexDecompressError(e) => write!(f, "lz4_flex decompression failed: {}", e),
+            #[cfg(feature = "lz4-sys")]
+            Self::Lz4SysCompressError => write!(f, "lz4-sys compression failed"),
+            #[cfg(feature = "lz4-sys")]
+            Self::Lz4SysDecompressError => write!(f, "lz4-sys decompression failed"),
+        }
+    }
+}
+impl StdError for Lz4Error {
+    fn source(&self) -> Option<&(dyn StdError + 'static)> {
+        match self {
+            #[cfg(feature = "lz4_flex")]
+            Self::Lz4FlexCompressError(e) => Some(e),
+            #[cfg(feature = "lz4_flex")]
+            Self::Lz4FlexDecompressError(e) => Some(e),
+            #[cfg(feature = "lz4-sys")]
+            Self::Lz4SysCompressError => None,
+            #[cfg(feature = "lz4-sys")]
+            Self::Lz4SysDecompressError => None,
+        }
+    }
+}
+#[cfg(feature = "lz4_flex")]
+impl From<Lz4FlexCompressError> for Lz4Error {
+    fn from(error: Lz4FlexCompressError) -> Self {
+        Self::Lz4FlexCompressError(error)
+    }
+}
+#[cfg(feature = "lz4_flex")]
+impl From<Lz4FlexDecompressError> for Lz4Error {
+    fn from(error: Lz4FlexDecompressError) -> Self {
+        Self::Lz4FlexDecompressError(error)
+    }
+}
+
 // Error
 
 #[derive(Debug)]
@@ -87,8 +155,7 @@ pub(crate) enum Error {
     Internal(ErrorInternal),
     CorruptedStream(ErrorCorruptedStream),
     WrongBlockSize(ErrorWrongBlockSize),
-    Lz4Compress(Lz4CompressError),
-    Lz4Decompress(Lz4DecompressError),
+    Lz4(Lz4Error),
     Io(IoError),
 }
 impl fmt::Display for Error {
@@ -97,8 +164,7 @@ impl fmt::Display for Error {
             Self::Internal(e) => e.fmt(f),
             Self::CorruptedStream(e) => e.fmt(f),
             Self::WrongBlockSize(e) => e.fmt(f),
-            Self::Lz4Compress(e) => e.fmt(f),
-            Self::Lz4Decompress(e) => e.fmt(f),
+            Self::Lz4(e) => e.fmt(f),
             Self::Io(e) => e.fmt(f),
         }
     }
@@ -123,14 +189,9 @@ impl From<ErrorWrongBlockSize> for Error {
         Self::WrongBlockSize(error)
     }
 }
-impl From<Lz4CompressError> for Error {
-    fn from(error: Lz4CompressError) -> Self {
-        Self::Lz4Compress(error)
-    }
-}
-impl From<Lz4DecompressError> for Error {
-    fn from(error: Lz4DecompressError) -> Self {
-        Self::Lz4Decompress(error)
+impl From<Lz4Error> for Error {
+    fn from(error: Lz4Error) -> Self {
+        Self::Lz4(error)
     }
 }
 impl From<IoError> for Error {
@@ -144,8 +205,7 @@ impl From<Error> for IoError {
             Error::Internal(err) => Self::new(IoErrorKind::Other, err),
             Error::CorruptedStream(err) => err.into(),
             Error::WrongBlockSize(err) => err.into(),
-            Error::Lz4Compress(err) => Self::new(IoErrorKind::Other, err),
-            Error::Lz4Decompress(err) => Self::new(IoErrorKind::Other, err),
+            Error::Lz4(err) => Self::new(IoErrorKind::Other, err),
             Error::Io(err) => err,
         }
     }
@@ -159,7 +219,7 @@ pub(crate) struct Checksum {
 
 impl Checksum {
     pub(crate) fn new(f: fn(&[u8]) -> u32) -> Self {
-        Self { f: f }
+        Self { f }
     }
 
     pub(crate) fn run(&self, buf: &[u8]) -> u32 {

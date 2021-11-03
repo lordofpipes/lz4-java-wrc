@@ -17,7 +17,14 @@ clap = "2"
 
 [dependencies.lz4jb]
 path = ".."
+default-features = false
+
 
 [[bin]]
 name = "lz4jb"
 path = "src/main.rs"
+
+[features]
+default = ["lz4_flex"]
+lz4_flex = ["lz4jb/use_lz4_flex"]
+lz4-sys = ["lz4jb/use_lz4-sys"]

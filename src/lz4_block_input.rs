@@ -1,7 +1,6 @@
 use crate::common::{Checksum, ErrorCorruptedStream, Result};
+use crate::compression::{Compression, Context};
 use crate::lz4_block_header::{CompressionMethod, Lz4BlockHeader};
-
-use lz4_flex::block::decompress_into as lz4_decompress;
 
 use std::cmp::min;
 use std::io::Read;
@@ -29,8 +28,9 @@ use std::io::Read;
 /// }
 /// ```
 #[derive(Debug)]
-pub struct Lz4BlockInput<R: Read + Sized> {
+pub struct Lz4BlockInput<R: Read + Sized, C: Compression> {
     reader: R,
+    compression: C,
     compressed_buf: Vec<u8>,
     decompressed_buf: Vec<u8>,
     read_ptr: usize,
@@ -38,20 +38,37 @@ pub struct Lz4BlockInput<R: Read + Sized> {
     stop_on_empty_block: bool,
 }
 
-impl<R: Read> Lz4BlockInput<R> {
+impl<R: Read> Lz4BlockInput<R, Context> {
+    /// Create a new [`Lz4BlockInput`] with the default [`Compression`] implementation.
+    ///
+    /// See [`Self::with_context()`]
+    pub fn new(r: R) -> Self {
+        Self::with_context(r, Context::default())
+    }
+}
+
+impl<R: Read, C: Compression> Lz4BlockInput<R, C> {
     /// Create a new [`Lz4BlockInput`] with the default checksum implementation which matches the Java's default implementation.
     ///
+    ///
+    ///
     /// See [`Self::with_checksum()`]
-    pub fn new(r: R) -> Self {
-        Self::with_checksum(r, Lz4BlockHeader::default_checksum, true)
+    pub fn with_context(r: R, c: C) -> Self {
+        Self::with_checksum(r, c, Lz4BlockHeader::default_checksum, true)
     }
 
     /// Create a new [`Lz4BlockInput`].
     ///
     /// The checksum must return a [`u32`].
-    pub fn with_checksum(r: R, checksum: fn(&[u8]) -> u32, stop_on_empty_block: bool) -> Self {
+    pub fn with_checksum(
+        r: R,
+        c: C,
+        checksum: fn(&[u8]) -> u32,
+        stop_on_empty_block: bool,
+    ) -> Self {
         Self {
             reader: r,
+            compression: c,
             compressed_buf: Vec::new(),
             decompressed_buf: Vec::new(),
             read_ptr: 0,
@@ -61,7 +78,7 @@ impl<R: Read> Lz4BlockInput<R> {
     }
 
     fn read_header(&mut self) -> std::io::Result<Option<Lz4BlockHeader>> {
-        return Ok(loop {
+        Ok(loop {
             match Lz4BlockHeader::read(&mut self.reader)? {
                 None => break None,
                 Some(h) => {
@@ -72,7 +89,7 @@ impl<R: Read> Lz4BlockInput<R> {
                     }
                 }
             };
-        });
+        })
     }
 
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
@@ -89,22 +106,23 @@ impl<R: Read> Lz4BlockInput<R> {
             );
 
             match header.compression_method {
-                CompressionMethod::RAW => self.reader.read_exact(self.decompressed_buf.as_mut())?,
+                CompressionMethod::Raw => self.reader.read_exact(self.decompressed_buf.as_mut())?,
                 CompressionMethod::LZ4 => {
                     ensure_vec(
                         &mut self.compressed_buf,
-                        header.compression_level.get_max_compressed_buffer_len(),
+                        self.compression.get_maximum_compressed_buffer_len(
+                            header.compression_level.get_max_decompressed_buffer_len(),
+                        ),
                         header.compressed_len,
                     );
                     self.reader.read_exact(self.compressed_buf.as_mut())?;
-                    match lz4_decompress(
-                        self.compressed_buf.as_ref(),
-                        self.decompressed_buf.as_mut(),
-                        0,
-                    ) {
+                    match self
+                        .compression
+                        .decompress(self.compressed_buf.as_ref(), self.decompressed_buf.as_mut())
+                    {
                         Ok(s) => {
                             if s != self.decompressed_buf.len() {
-                                return Err(ErrorCorruptedStream::new());
+                                return ErrorCorruptedStream::new_error();
                             }
                         }
                         Err(err) => {
@@ -114,7 +132,7 @@ impl<R: Read> Lz4BlockInput<R> {
                 }
             }
             if self.checksum.run(self.decompressed_buf.as_ref()) != header.checksum {
-                return Err(ErrorCorruptedStream::new());
+                return ErrorCorruptedStream::new_error();
             }
             self.read_ptr = 0;
         }
@@ -123,7 +141,7 @@ impl<R: Read> Lz4BlockInput<R> {
         buf[..size_to_copy]
             .copy_from_slice(&self.decompressed_buf[self.read_ptr..self.read_ptr + size_to_copy]);
         self.read_ptr += size_to_copy;
-        return Ok(size_to_copy);
+        Ok(size_to_copy)
     }
 }
 
@@ -135,7 +153,7 @@ fn ensure_vec(v: &mut Vec<u8>, max_block_size: usize, desired_len: u32) {
     v.resize_with(desired_len as usize, u8::default);
 }
 
-impl<R: Read> Read for Lz4BlockInput<R> {
+impl<R: Read, C: Compression> Read for Lz4BlockInput<R, C> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         Ok(Lz4BlockInput::read(self, buf)?)
     }
@@ -144,6 +162,7 @@ impl<R: Read> Read for Lz4BlockInput<R> {
 #[cfg(test)]
 mod test_lz4_block_input {
     use super::Lz4BlockInput;
+    use crate::compression::Context;
     use crate::lz4_block_header::data::{VALID_DATA, VALID_EMPTY};
 
     use std::io::Read;
@@ -169,17 +188,20 @@ mod test_lz4_block_input {
     #[test]
     fn read_with_checksum_invalid() {
         let mut out = Vec::<u8>::new();
-        assert!(
-            Lz4BlockInput::with_checksum(&VALID_DATA[..], |_| 0x12345678, true)
-                .read_to_end(&mut out)
-                .is_err()
-        );
+        assert!(Lz4BlockInput::with_checksum(
+            &VALID_DATA[..],
+            Context::default(),
+            |_| 0x12345678,
+            true
+        )
+        .read_to_end(&mut out)
+        .is_err());
     }
 
     #[test]
     fn read_with_checksum_valid() {
         let mut out = Vec::<u8>::new();
-        Lz4BlockInput::with_checksum(&VALID_DATA[..], |_| 0x0677e452, true)
+        Lz4BlockInput::with_checksum(&VALID_DATA[..], Context::default(), |_| 0x0677e452, true)
             .read_to_end(&mut out)
             .unwrap();
         assert_eq!(out, "...".as_bytes());
@@ -191,7 +213,7 @@ mod test_lz4_block_input {
         input.extend_from_slice(&[0; 21]);
 
         let mut out = Vec::<u8>::new();
-        Lz4BlockInput::with_checksum(&input[..], |_| 0x0677e452, true)
+        Lz4BlockInput::with_checksum(&input[..], Context::default(), |_| 0x0677e452, true)
             .read_to_end(&mut out)
             .unwrap();
         assert_eq!(out, "".as_bytes());
@@ -205,7 +227,7 @@ mod test_lz4_block_input {
         input.extend_from_slice(&VALID_EMPTY);
 
         let mut out = Vec::<u8>::new();
-        Lz4BlockInput::with_checksum(&input[..], |_| 0x0677e452, false)
+        Lz4BlockInput::with_checksum(&input[..], Context::default(), |_| 0x0677e452, false)
             .read_to_end(&mut out)
             .unwrap();
         assert_eq!(out, "".as_bytes());
@@ -220,10 +242,13 @@ mod test_lz4_block_input {
         input.extend_from_slice(&[0; 21]);
 
         let mut out = Vec::<u8>::new();
-        assert!(
-            Lz4BlockInput::with_checksum(&input[..], |_| 0x0677e452, false)
-                .read_to_end(&mut out)
-                .is_err()
-        );
+        assert!(Lz4BlockInput::with_checksum(
+            &input[..],
+            Context::default(),
+            |_| 0x0677e452,
+            false
+        )
+        .read_to_end(&mut out)
+        .is_err());
     }
 }

@@ -17,7 +17,8 @@ fn main() {
             ReturnCode::ErrorParsing
         }
         Ok(args) => {
-            let command = command::Command::new(args.mode, args.keep_input, args.force);
+            let command =
+                command::Command::new(args.lz4jb_context, args.mode, args.keep_input, args.force);
             args.files
                 .iter()
                 .map(|f| (f, command.run(f)))

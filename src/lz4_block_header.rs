@@ -1,6 +1,5 @@
 use crate::common::{ErrorCorruptedStream, ErrorWrongBlockSize, IoErrorKind};
 
-use lz4_flex::block::get_maximum_output_size as lz4_get_maximum_output_size;
 use twox_hash::XxHash32;
 
 use std::convert::TryInto;
@@ -9,9 +8,7 @@ use std::io::{Read, Result, Write};
 use std::ops::Range;
 use std::result::Result as StdResult;
 
-const MAGIC_HEADER: [u8; 8] = [
-    'L' as u8, 'Z' as u8, '4' as u8, 'B' as u8, 'l' as u8, 'o' as u8, 'c' as u8, 'k' as u8,
-];
+const MAGIC_HEADER: [u8; 8] = [b'L', b'Z', b'4', b'B', b'l', b'o', b'c', b'k'];
 const MAGIC_HEADER_RANGE: Range<usize> = 0..MAGIC_HEADER.len();
 const TOKEN_INDEX: usize = MAGIC_HEADER_RANGE.end;
 const COMPRESSED_LEN_RANGE: Range<usize> = (TOKEN_INDEX + 1)..(TOKEN_INDEX + 5);
@@ -39,7 +36,7 @@ const COMPRESSION_BLOCKS: [usize; 0x10] = [
     1 << (COMPRESSION_LEVEL_BASE + 3),
     1 << (COMPRESSION_LEVEL_BASE + 2),
     1 << (COMPRESSION_LEVEL_BASE + 1),
-    1 << (COMPRESSION_LEVEL_BASE + 0),
+    1 << (COMPRESSION_LEVEL_BASE),
     0,
 ];
 
@@ -62,19 +59,16 @@ impl Lz4BlockHeader {
 
     pub(crate) fn read<R: Read>(reader: &mut R) -> Result<Option<Self>> {
         let mut header = [0u8; HEADER_LENGTH];
-        match reader.read_exact(&mut header[..]) {
-            Err(err) => {
-                return if matches!(err.kind(), IoErrorKind::UnexpectedEof) {
-                    Ok(None)
-                } else {
-                    Err(err)
-                };
-            }
-            Ok(_) => {}
+        if let Err(err) = reader.read_exact(&mut header[..]) {
+            return if matches!(err.kind(), IoErrorKind::UnexpectedEof) {
+                Ok(None)
+            } else {
+                Err(err)
+            };
         }
         let magic = &header[MAGIC_HEADER_RANGE];
         if magic != MAGIC_HEADER {
-            return Err(ErrorCorruptedStream::new());
+            return ErrorCorruptedStream::new_error();
         }
         let compression_method = CompressionMethod::from_token(header[TOKEN_INDEX])?;
         let compression_level = CompressionLevel::from_token(header[TOKEN_INDEX]);
@@ -85,22 +79,20 @@ impl Lz4BlockHeader {
         if decompressed_len > compression_level.get_max_decompressed_buffer_len() as u32
             || compressed_len > i32::MAX as u32 // java uses signed int
             || ((compressed_len == 0) != (decompressed_len == 0))
-            || (matches!(compression_method, CompressionMethod::RAW)
+            || (matches!(compression_method, CompressionMethod::Raw)
                 && compressed_len != decompressed_len)
         {
-            return Err(ErrorCorruptedStream::new());
+            return ErrorCorruptedStream::new_error();
         }
-        if compressed_len == 0 && decompressed_len == 0 {
-            if checksum != 0 {
-                return Err(ErrorCorruptedStream::new());
-            }
+        if compressed_len == 0 && decompressed_len == 0 && checksum != 0 {
+            return ErrorCorruptedStream::new_error();
         }
         Ok(Some(Self {
-            compression_level: compression_level,
-            compression_method: compression_method,
-            compressed_len: compressed_len,
-            decompressed_len: decompressed_len,
-            checksum: checksum,
+            compression_method,
+            compression_level,
+            compressed_len,
+            decompressed_len,
+            checksum,
         }))
     }
 
@@ -124,29 +116,23 @@ pub(crate) struct CompressionLevel {
 
 impl CompressionLevel {
     pub(crate) fn from_block_size(block_size: usize) -> StdResult<Self, ErrorWrongBlockSize> {
-        if block_size < MIN_BLOCK_SIZE || block_size > MAX_BLOCK_SIZE {
-            return Err(ErrorWrongBlockSize::new(
-                block_size,
-                MIN_BLOCK_SIZE,
-                MAX_BLOCK_SIZE,
-            ));
+        if (MIN_BLOCK_SIZE..=MAX_BLOCK_SIZE).contains(&block_size) {
+            let index = COMPRESSION_BLOCKS
+                .iter()
+                .position(|block| *block < block_size)
+                .ok_or_else(|| {
+                    ErrorWrongBlockSize::new(block_size, MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
+                })?;
+            Ok(Self {
+                compression_level: (0x0f - index) as u8,
+            })
+        } else {
+            ErrorWrongBlockSize::new_error(block_size, MIN_BLOCK_SIZE, MAX_BLOCK_SIZE)
         }
-
-        let index = COMPRESSION_BLOCKS
-            .iter()
-            .position(|block| *block < block_size)
-            .ok_or(ErrorWrongBlockSize::new(
-                block_size,
-                MIN_BLOCK_SIZE,
-                MAX_BLOCK_SIZE,
-            ))?;
-        Ok(Self {
-            compression_level: (0x0f - index) as u8,
-        })
     }
 
     pub(crate) fn get_max_decompressed_buffer_len(&self) -> usize {
-        1 << (self.compression_level as usize + COMPRESSION_LEVEL_BASE as usize)
+        1 << (self.compression_level as usize + COMPRESSION_LEVEL_BASE)
     }
 
     pub(crate) fn from_token(token: u8) -> Self {
@@ -158,17 +144,13 @@ impl CompressionLevel {
     pub(crate) fn get_token(&self) -> u8 {
         self.compression_level
     }
-
-    pub(crate) fn get_max_compressed_buffer_len(&self) -> usize {
-        lz4_get_maximum_output_size(self.get_max_decompressed_buffer_len())
-    }
 }
 
 // CompressionMethod
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CompressionMethod {
-    RAW = 1,
+    Raw = 1,
     LZ4 = 2,
 }
 
@@ -176,14 +158,14 @@ impl CompressionMethod {
     pub(crate) fn from_token(token: u8) -> StdResult<Self, ErrorCorruptedStream> {
         let compression_method = (token as usize & 0xf0) >> 4;
         match compression_method {
-            x if x == Self::RAW as usize => Ok(Self::RAW),
+            x if x == Self::Raw as usize => Ok(Self::Raw),
             x if x == Self::LZ4 as usize => Ok(Self::LZ4),
             _ => Err(ErrorCorruptedStream::new()),
         }
     }
 
     pub(crate) fn get_token(&self) -> u8 {
-        (self.clone() as u8) << 4
+        (*self as u8) << 4
     }
 }
 
@@ -279,7 +261,7 @@ mod test_lz4_block_header {
         let mut d: &[u8] = v.as_mut();
         let header = Lz4BlockHeader::read(&mut d).unwrap().unwrap();
 
-        assert!(matches!(header.compression_method, CompressionMethod::RAW));
+        assert!(matches!(header.compression_method, CompressionMethod::Raw));
         assert_eq!(header.compression_level.compression_level, 0);
         assert_eq!(header.compressed_len, 0);
         assert_eq!(header.decompressed_len, 0);
@@ -292,7 +274,7 @@ mod test_lz4_block_header {
         let mut d: &[u8] = v.as_mut();
         let header = Lz4BlockHeader::read(&mut d).unwrap().unwrap();
 
-        assert!(matches!(header.compression_method, CompressionMethod::RAW));
+        assert!(matches!(header.compression_method, CompressionMethod::Raw));
         assert_eq!(header.compression_level.compression_level, 0);
         assert_eq!(header.compressed_len, 3);
         assert_eq!(header.decompressed_len, 3);
@@ -397,7 +379,7 @@ mod test_compression_method {
         for i in 0x00..=0x0f {
             assert!(matches!(
                 CompressionMethod::from_token(0x10 | i).unwrap(),
-                CompressionMethod::RAW
+                CompressionMethod::Raw
             ));
         }
     }
@@ -423,7 +405,7 @@ mod test_compression_method {
 
     #[test]
     fn to_token_raw() {
-        assert_eq!(CompressionMethod::RAW.get_token(), 0x10);
+        assert_eq!(CompressionMethod::Raw.get_token(), 0x10);
     }
 
     #[test]

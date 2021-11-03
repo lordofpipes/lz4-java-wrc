@@ -1,13 +1,35 @@
 use clap::{App, Arg};
+use lz4jb::Context as Lz4Context;
 
 use std::fmt;
 
-const DEFAULT_BLOCKSIZE: usize = 1 << 16;
 const DEFAULT_SUFFIX: &str = ".lz4";
+
+#[cfg(feature = "lz4_flex")]
+const AVAILABLE_LIBRARY_LZ4_FLEX: Option<Lz4Context> = Some(Lz4Context::Lz4Flex);
+#[cfg(not(feature = "lz4_flex"))]
+const AVAILABLE_LIBRARY_LZ4_FLEX: Option<Lz4Context> = None;
+#[cfg(feature = "lz4-sys")]
+const AVAILABLE_LIBRARY_LZ4_SYS: Option<Lz4Context> = Some(Lz4Context::Lz4Sys);
+#[cfg(not(feature = "lz4-sys"))]
+const AVAILABLE_LIBRARY_LZ4_SYS: Option<Lz4Context> = None;
+
+const AVAILABLE_LIBRARIES: [(&str, Option<Lz4Context>, &str); 2] = [
+    (
+        "lz4_flex",
+        AVAILABLE_LIBRARY_LZ4_FLEX,
+        "use the lz4_flex library (https://crates.io/crates/lz4_flex).",
+    ),
+    (
+        "lz4-sys",
+        AVAILABLE_LIBRARY_LZ4_SYS,
+        "use the lz4-sys library (https://crates.io/crates/lz4-sys).",
+    ),
+];
 
 #[derive(Debug, Copy, Clone)]
 pub(crate) enum Mode {
-    Compress { block_size: usize },
+    Compress { block_size: Option<usize> },
     Decompress,
     List,
     Test,
@@ -15,10 +37,10 @@ pub(crate) enum Mode {
 impl fmt::Display for Mode {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Mode::Compress { block_size: _ } => write!(f, "compress"),
-            Mode::Decompress => write!(f, "decompress"),
-            Mode::List => write!(f, "list"),
-            Mode::Test => write!(f, "test"),
+            Self::Compress { block_size: _ } => write!(f, "compress"),
+            Self::Decompress => write!(f, "decompress"),
+            Self::List => write!(f, "list"),
+            Self::Test => write!(f, "test"),
         }
     }
 }
@@ -89,10 +111,28 @@ pub(crate) struct Arguments {
     pub(crate) mode: Mode,
     pub(crate) keep_input: bool,
     pub(crate) force: bool,
+    pub(crate) lz4jb_context: Lz4Context,
 }
 
-fn build_cli() -> App<'static, 'static> {
-    App::new("lz4jb")
+fn get_library(name: &str) -> Option<Lz4Context> {
+    AVAILABLE_LIBRARIES
+        .iter()
+        .find(|t| name == t.0)
+        .map(|t| t.1)
+        .flatten()
+}
+
+pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
+    let library_long_help = format!(
+        "Use an alternative library. Available libraries:\n{}",
+        AVAILABLE_LIBRARIES
+            .iter()
+            .filter(|t| t.1.is_some())
+            .map(|t| format!(" - {}: {}", t.0, t.2))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    let app = App::new("lz4jb")
         .version(clap::crate_version!())
         .about(clap::crate_description!())
         .arg(
@@ -100,7 +140,8 @@ fn build_cli() -> App<'static, 'static> {
                 .short("z")
                 .long("compress")
                 .conflicts_with_all(&["decompress", "list", "test"])
-                .help("Compress. This is the default operation mode."),
+                .help("Compress. This is the default operation mode.")
+                .display_order(1),
         )
         .arg(
             Arg::with_name("decompress")
@@ -108,42 +149,48 @@ fn build_cli() -> App<'static, 'static> {
                 .long("decompress")
                 .visible_alias("uncompress")
                 .conflicts_with_all(&["compress", "list", "test"])
-                .help("Decompress."),
+                .help("Decompress.")
+                .display_order(1),
         )
         .arg(
             Arg::with_name("list")
                 .short("l")
                 .long("list")
                 .conflicts_with_all(&["compress", "decompress", "test"])
-                .help("Test the integrity of compressed files."),
+                .help("Test the integrity of compressed files.")
+                .display_order(1),
         )
         .arg(
             Arg::with_name("test")
                 .short("t")
                 .long("test")
                 .conflicts_with_all(&["compress", "decompress", "list"])
-                .help("Test the integrity of compressed files."),
+                .help("Test the integrity of compressed files.")
+                .display_order(1),
         )
         .arg(
             Arg::with_name("stdout")
                 .short("c")
                 .long("stdout")
                 .conflicts_with_all(&["list", "test"])
-                .help("Write output on standard output; keep original files unchanged."),
+                .help("Write output on standard output; keep original files unchanged.")
+                .display_order(100),
         )
         .arg(
             Arg::with_name("keep")
                 .short("k")
                 .long("keep")
                 .conflicts_with_all(&["list", "test"])
-                .help("Keep (don't delete) input files during compression or decompression."),
+                .help("Keep (don't delete) input files during compression or decompression.")
+                .display_order(100),
         )
         .arg(
             Arg::with_name("force")
                 .short("f")
                 .long("force")
                 .conflicts_with_all(&["list", "test"])
-                .help("Force the compression or decompression."),
+                .help("Force the compression or decompression.")
+                .display_order(100),
         )
         .arg(
             Arg::with_name("suffix")
@@ -151,7 +198,8 @@ fn build_cli() -> App<'static, 'static> {
                 .long("suffix")
                 .takes_value(true)
                 .conflicts_with_all(&["list", "test"])
-                .help("Append this suffix instead of the default .lz4 for compression."),
+                .help("Append this suffix instead of the default .lz4 for compression.")
+                .display_order(100),
         )
         .arg(
             Arg::with_name("blocksize")
@@ -159,17 +207,37 @@ fn build_cli() -> App<'static, 'static> {
                 .long("blocksize")
                 .takes_value(true)
                 .conflicts_with_all(&["decompress", "list", "test"])
-                .help("Block size for compression in bytes (between 64 and 33554432)."),
+                .help("Block size for compression in bytes (between 64 and 33554432).")
+                .display_order(100),
+        )
+        .arg(
+            Arg::with_name("library")
+                .short("L")
+                .long("library")
+                .takes_value(true)
+                .help("Use an alternative library. See --help for the list of available libraries.")
+                .long_help(library_long_help.as_str())
+                .validator(|v| {
+                    get_library(v.as_str()).map(|_| ()).ok_or(format!(
+                        "library {} is not available.\nAvailable values: {}",
+                        v,
+                        AVAILABLE_LIBRARIES
+                            .iter()
+                            .filter(|t| t.1.is_some())
+                            .map(|t| t.0)
+                            .collect::<Vec<&str>>()
+                            .join(", ")
+                    ))
+                }),
         )
         .arg(
             Arg::with_name("file")
                 .help("Sets the input file to use.")
+                .long_help("Sets the input files to use. By default read from stdin and write to stdout.\nThe output file is determined this way:\n - <file> plus <suffix> when compressing\n - <file> with the <suffix> removed when decompressing")
                 .multiple(true),
-        )
-}
+        );
 
-pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
-    let matches = build_cli().get_matches();
+    let matches = app.get_matches();
 
     let mode = match (
         matches.is_present("compress"),
@@ -178,11 +246,14 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
         matches.is_present("test"),
     ) {
         (_, false, false, false) => Mode::Compress {
-            block_size: matches
+            block_size: match matches
                 .value_of("blocksize")
                 .map(str::parse::<usize>)
-                .unwrap_or_else(|| Ok(DEFAULT_BLOCKSIZE))
-                .map_err(|_| "Failed to parse the blocksize argument as integer")?,
+                .transpose()
+            {
+                Ok(b) => b,
+                Err(_) => return Err("could not parse blocksize"),
+            },
         },
         (false, true, false, false) => Mode::Decompress,
         (false, false, true, false) => Mode::List,
@@ -210,15 +281,21 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
                 },
             })
         })
-        .collect::<Result<Vec<Files>, &'static str>>()?;
+        .collect::<Result<Vec<_>, _>>()?;
+    let lz4jb_context = matches
+        .value_of("library")
+        .map(get_library)
+        .flatten()
+        .unwrap_or_default();
     Ok(Arguments {
         files: if files.is_empty() {
             vec![Files::stdio()]
         } else {
             files
         },
-        mode: mode,
-        keep_input: keep_input,
-        force: force,
+        mode,
+        keep_input,
+        force,
+        lz4jb_context,
     })
 }

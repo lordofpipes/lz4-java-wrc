@@ -16,6 +16,13 @@ This is not compatible with the standard LZ4 Block format.
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["use_lz4_flex"]
+use_lz4_flex = ["lz4_flex"]
+use_lz4-sys = ["lz4-sys", "libc"]
+
 [dependencies]
-lz4_flex = { version = "0.8", default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+lz4_flex = { version = "0.8", optional = true, default-features = false, features = ["std", "safe-encode", "safe-decode"] }
+lz4-sys = { version = "1.9", optional = true }
+libc = { version = "0.2", optional = true }
 twox-hash = { version = "1", default-features = false }

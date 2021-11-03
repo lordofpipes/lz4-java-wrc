@@ -17,7 +17,7 @@
 //!
 //! fn compress(d: &str) -> Result<Vec<u8>> {
 //!     let mut compressed = Vec::new();
-//!     Lz4BlockOutput::new(&mut compressed, 64)?.write_all(d.as_bytes())?;
+//!     Lz4BlockOutput::new(&mut compressed).write_all(d.as_bytes())?;
 //!     Ok(compressed)
 //! }
 //! fn decompress(r: &mut dyn Read) -> Result<String> {
@@ -38,9 +38,11 @@
 //! ```
 
 mod common;
+mod compression;
 mod lz4_block_header;
 mod lz4_block_input;
 mod lz4_block_output;
 
+pub use compression::{Compression, Context};
 pub use lz4_block_input::Lz4BlockInput;
 pub use lz4_block_output::Lz4BlockOutput;
