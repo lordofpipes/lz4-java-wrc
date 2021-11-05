@@ -34,6 +34,8 @@ pub trait Compression {
 
 /// Use a given context to switch between LZ4 libraries.
 ///
+/// By default only lz4_flex is available. The other ones can be enabled by changing the feature flags.
+///
 /// For most users, [`Context::default()`] is a good option.
 #[derive(Debug, Copy, Clone)]
 pub enum Context {

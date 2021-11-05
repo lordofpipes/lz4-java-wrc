@@ -79,17 +79,18 @@ USAGE:
 FLAGS:
     -z, --compress      Compress. This is the default operation mode.
     -d, --decompress    Decompress. [aliases: uncompress]
-    -f, --force         Force the compression or decompression.
-    -h, --help          Prints help information
-    -k, --keep          Keep (don't delete) input files during compression or decompression.
-    -l, --list          Test the integrity of compressed files.
-    -c, --stdout        Write output on standard output; keep original files unchanged.
+    -l, --list          List compressed file contents.
     -t, --test          Test the integrity of compressed files.
+    -f, --force         Force the compression or decompression.
+    -k, --keep          Keep (don't delete) input files during compression or decompression.
+    -c, --stdout        Write to the standard output.
+    -h, --help          Prints help information
     -V, --version       Prints version information
 
 OPTIONS:
     -b, --blocksize <blocksize>    Block size for compression in bytes (between 64 and 33554432).
-    -S, --suffix <suffix>          Append this suffix instead of the default .lz4 for compression.
+    -E, --extension <extension>    Append this extension instead of the default lz4 for compression.
+    -L, --library <library>        Use an alternative library. See --help for the list of available libraries.
 
 ARGS:
     <file>...    Sets the input file to use.

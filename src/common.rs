@@ -4,10 +4,11 @@ use lz4_flex::block::{
 };
 
 use std::error::Error as StdError;
+use std::fmt;
 pub(crate) use std::io::{Error as IoError, ErrorKind as IoErrorKind};
 use std::result::Result as StdResult;
+
 pub(crate) type Result<T> = StdResult<T, Error>;
-use std::fmt;
 
 // ErrorInternal
 

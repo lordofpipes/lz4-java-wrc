@@ -5,6 +5,7 @@ use std::fs::{metadata, remove_file, set_permissions, File, OpenOptions};
 use std::io::{
     self, Error as IoError, ErrorKind as IoErrorKind, Read, Result, Stdin, Stdout, Write,
 };
+use std::path::Path;
 
 use atty::Stream;
 use lz4jb::{Context as Lz4Context, Lz4BlockInput, Lz4BlockOutput};
@@ -74,7 +75,7 @@ fn run_test<R: Read>(context: Lz4Context, from: R) -> Result<()> {
     to.flush()
 }
 
-fn run_list<R: Read>(context: Lz4Context, from: R, file: &str) -> Result<()> {
+fn run_list<R: Read>(context: Lz4Context, from: R, file: &Path) -> Result<()> {
     let mut counter = ReadCounter::new(from);
     let mut from = Lz4BlockInput::with_context(&mut counter, context);
     let mut to = io::sink();
@@ -82,17 +83,17 @@ fn run_list<R: Read>(context: Lz4Context, from: R, file: &str) -> Result<()> {
     let compressed_size = counter.sum();
     let ratio = 100. * (compressed_size as f64) / (decompressed_size as f64);
     println!(
-        "{:>19} {:>19} {:>5.1}% {}",
+        "{:>19} {:>19} {:>5.1}% {:?}",
         compressed_size, decompressed_size, ratio, file
     );
     Ok(())
 }
 
-fn get_filename_info(f: &FileDesc) -> &str {
+fn get_filename_info(f: &FileDesc) -> &Path {
     match f {
         FileDesc::Filename(f) => f,
-        FileDesc::Stdio => "<stdio>",
-        FileDesc::None => "<none>",
+        FileDesc::Stdio => Path::new("<stdio>"),
+        FileDesc::None => Path::new("<none>"),
     }
 }
 

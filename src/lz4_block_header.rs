@@ -8,7 +8,7 @@ use std::io::{Read, Result, Write};
 use std::ops::Range;
 use std::result::Result as StdResult;
 
-const MAGIC_HEADER: [u8; 8] = [b'L', b'Z', b'4', b'B', b'l', b'o', b'c', b'k'];
+const MAGIC_HEADER: &[u8; 8] = b"LZ4Block";
 const MAGIC_HEADER_RANGE: Range<usize> = 0..MAGIC_HEADER.len();
 const TOKEN_INDEX: usize = MAGIC_HEADER_RANGE.end;
 const COMPRESSED_LEN_RANGE: Range<usize> = (TOKEN_INDEX + 1)..(TOKEN_INDEX + 5);
@@ -50,10 +50,13 @@ pub(crate) struct Lz4BlockHeader {
 }
 
 impl Lz4BlockHeader {
+    /// Implement the java's default checksum implementation
+    ///
+    /// This implementation includes the bug around the missing 4 first bits.
     pub(crate) fn default_checksum(buf: &[u8]) -> u32 {
         let mut hasher = XxHash32::with_seed(DEFAULT_SEED);
         hasher.write(buf);
-        // drop the 1st byte: https://github.com/lz4/lz4-java/blob/1.8.0/src/java/net/jpountz/xxhash/StreamingXXHash32.java#L106
+        // Drop the 4 first bits: https://github.com/lz4/lz4-java/blob/1.8.0/src/java/net/jpountz/xxhash/StreamingXXHash32.java#L106
         (hasher.finish() & 0x0fffffff) as u32
     }
 
@@ -98,7 +101,7 @@ impl Lz4BlockHeader {
 
     pub(crate) fn write<W: Write>(&self, writer: &mut W) -> Result<usize> {
         let mut buf = [0u8; HEADER_LENGTH];
-        buf[MAGIC_HEADER_RANGE].clone_from_slice(&MAGIC_HEADER);
+        buf[MAGIC_HEADER_RANGE].clone_from_slice(MAGIC_HEADER);
         buf[TOKEN_INDEX] = self.compression_level.get_token() | self.compression_method.get_token();
         buf[COMPRESSED_LEN_RANGE].clone_from_slice(&(self.compressed_len).to_le_bytes());
         buf[DECOMPRESSED_LEN_RANGE].clone_from_slice(&(self.decompressed_len).to_le_bytes());
@@ -151,7 +154,7 @@ impl CompressionLevel {
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum CompressionMethod {
     Raw = 1,
-    LZ4 = 2,
+    Lz4 = 2,
 }
 
 impl CompressionMethod {
@@ -159,7 +162,7 @@ impl CompressionMethod {
         let compression_method = (token as usize & 0xf0) >> 4;
         match compression_method {
             x if x == Self::Raw as usize => Ok(Self::Raw),
-            x if x == Self::LZ4 as usize => Ok(Self::LZ4),
+            x if x == Self::Lz4 as usize => Ok(Self::Lz4),
             _ => Err(ErrorCorruptedStream::new()),
         }
     }
@@ -294,12 +297,12 @@ mod test_lz4_block_header {
     fn read_lz4_different_sizes() {
         let mut v = VALID_DATA[..HEADER_LENGTH].to_vec();
         // update decompressed_len 3->4 + token
-        v[TOKEN_INDEX] = (v[TOKEN_INDEX] & 0x0f) | CompressionMethod::LZ4.get_token();
+        v[TOKEN_INDEX] = (v[TOKEN_INDEX] & 0x0f) | CompressionMethod::Lz4.get_token();
         v[DECOMPRESSED_LEN_RANGE.start] += 1;
         let mut d: &[u8] = v.as_mut();
         let header = Lz4BlockHeader::read(&mut d).unwrap().unwrap();
 
-        assert!(matches!(header.compression_method, CompressionMethod::LZ4));
+        assert!(matches!(header.compression_method, CompressionMethod::Lz4));
         assert_eq!(header.compression_level.compression_level, 0);
         assert_eq!(header.compressed_len, 3);
         assert_eq!(header.decompressed_len, 4);
@@ -389,7 +392,7 @@ mod test_compression_method {
         for i in 0x00..=0x0f {
             assert!(matches!(
                 CompressionMethod::from_token(0x20 | i).unwrap(),
-                CompressionMethod::LZ4
+                CompressionMethod::Lz4
             ));
         }
     }
@@ -410,6 +413,6 @@ mod test_compression_method {
 
     #[test]
     fn to_token_lz4() {
-        assert_eq!(CompressionMethod::LZ4.get_token(), 0x20);
+        assert_eq!(CompressionMethod::Lz4.get_token(), 0x20);
     }
 }

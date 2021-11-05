@@ -1,9 +1,11 @@
 use clap::{App, Arg};
 use lz4jb::Context as Lz4Context;
 
+use std::ffi::OsStr;
 use std::fmt;
+use std::path::{Path, PathBuf};
 
-const DEFAULT_SUFFIX: &str = ".lz4";
+const DEFAULT_EXTENSION: &str = "lz4";
 
 #[cfg(feature = "lz4_flex")]
 const AVAILABLE_LIBRARY_LZ4_FLEX: Option<Lz4Context> = Some(Lz4Context::Lz4Flex);
@@ -47,44 +49,48 @@ impl fmt::Display for Mode {
 
 #[derive(Debug)]
 pub(crate) enum FileDesc {
-    Filename(String),
+    Filename(PathBuf),
     Stdio,
     None,
 }
 
 impl FileDesc {
     fn decompressed(
-        decompressed_name: &str,
-        suffix: &str,
+        compressed_name: &Path,
+        extension: &OsStr,
         to_stdout: bool,
     ) -> Result<Self, &'static str> {
         if to_stdout {
             Ok(Self::Stdio)
         } else {
-            Ok(Self::Filename(
-                decompressed_name
-                    .strip_suffix(suffix)
-                    .map(|f| Ok(f.to_string()))
-                    .unwrap_or_else(|| Err("Could not guess the output filename"))?,
-            ))
+            Option::from(compressed_name)
+                .filter(|p| p.extension() == Some(extension))
+                .and_then(Path::file_stem)
+                .map(PathBuf::from)
+                .map(Self::Filename)
+                .map(Ok)
+                .unwrap_or_else(|| Err("Could not guess the output filename"))
         }
     }
     fn compressed(
-        compressed_name: &str,
-        suffix: &str,
+        decompressed_name: &Path,
+        extension: &OsStr,
         to_stdout: bool,
     ) -> Result<Self, &'static str> {
         if to_stdout {
             Ok(Self::Stdio)
         } else {
-            Ok(Self::Filename(compressed_name.to_string() + suffix))
+            let mut compressed_name = decompressed_name.as_os_str().to_os_string();
+            compressed_name.push(".");
+            compressed_name.push(extension);
+            Ok(Self::Filename(PathBuf::from(compressed_name)))
         }
     }
 }
 impl fmt::Display for FileDesc {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Self::Filename(filename) => write!(f, "filename={}", filename),
+            Self::Filename(filename) => write!(f, "filename={:?}", filename),
             Self::Stdio => write!(f, "stdio"),
             Self::None => write!(f, "<none>"),
         }
@@ -157,7 +163,7 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
                 .short("l")
                 .long("list")
                 .conflicts_with_all(&["compress", "decompress", "test"])
-                .help("Test the integrity of compressed files.")
+                .help("List compressed file contents.")
                 .display_order(1),
         )
         .arg(
@@ -193,12 +199,12 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
                 .display_order(100),
         )
         .arg(
-            Arg::with_name("suffix")
-                .short("S")
-                .long("suffix")
+            Arg::with_name("extension")
+                .short("E")
+                .long("extension")
                 .takes_value(true)
                 .conflicts_with_all(&["list", "test"])
-                .help("Append this suffix instead of the default .lz4 for compression.")
+                .help("Append this extension instead of the default lz4 for compression.")
                 .display_order(100),
         )
         .arg(
@@ -233,7 +239,7 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
         .arg(
             Arg::with_name("file")
                 .help("Sets the input file to use.")
-                .long_help("Sets the input files to use. By default read from stdin and write to stdout.\nThe output file is determined this way:\n - <file> plus <suffix> when compressing\n - <file> with the <suffix> removed when decompressing")
+                .long_help("Sets the input files to use. By default read from stdin and write to stdout.\nThe output file is determined this way:\n - <file>.<extension> when compressing\n - <file> with the .<extension> removed when decompressing")
                 .multiple(true),
         );
 
@@ -263,20 +269,25 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
         ),
     };
 
-    let suffix = matches.value_of("suffix").unwrap_or(DEFAULT_SUFFIX);
+    let extension = matches
+        .value_of_os("extension")
+        .unwrap_or_else(|| OsStr::new(DEFAULT_EXTENSION));
     let to_stdout = matches.is_present("stdout");
     let keep_input = matches.is_present("keep");
     let force = matches.is_present("force");
     let files = matches
-        .values_of("file")
+        .values_of_os("file")
         .into_iter()
         .flatten()
+        .map(Path::new)
         .map(|f| {
             Ok(Files {
                 file_in: FileDesc::Filename(f.into()),
                 file_out: match mode {
-                    Mode::Compress { block_size: _ } => FileDesc::compressed(f, suffix, to_stdout)?,
-                    Mode::Decompress => FileDesc::decompressed(f, suffix, to_stdout)?,
+                    Mode::Compress { block_size: _ } => {
+                        FileDesc::compressed(f, extension, to_stdout)?
+                    }
+                    Mode::Decompress => FileDesc::decompressed(f, extension, to_stdout)?,
                     _ => FileDesc::None,
                 },
             })
@@ -298,4 +309,64 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
         force,
         lz4jb_context,
     })
+}
+
+#[cfg(test)]
+mod test_arguments {
+
+    use super::FileDesc;
+    use std::ffi::OsStr;
+    use std::path::Path;
+
+    #[test]
+    fn filedesc_decompressed_basic() {
+        if let Ok(FileDesc::Filename(filename)) =
+            FileDesc::decompressed(Path::new("filename.ext"), OsStr::new("ext"), false)
+        {
+            assert_eq!(filename.to_str(), Some("filename"));
+        } else {
+            panic!("Wrong output");
+        }
+    }
+
+    #[test]
+    fn filedesc_decompressed_double_compressed() {
+        if let Ok(FileDesc::Filename(filename)) =
+            FileDesc::decompressed(Path::new("filename.ext.ext"), OsStr::new("ext"), false)
+        {
+            assert_eq!(filename.to_str(), Some("filename.ext"));
+        } else {
+            panic!("Wrong output");
+        }
+    }
+
+    #[test]
+    fn filedesc_decompressed_bad_extension() {
+        assert!(matches!(
+            FileDesc::decompressed(Path::new("filename.bad"), OsStr::new("ext"), false),
+            Err(_)
+        ));
+    }
+
+    #[test]
+    fn filedesc_compressed_basic() {
+        if let Ok(FileDesc::Filename(filename)) =
+            FileDesc::compressed(Path::new("filename"), OsStr::new("ext"), false)
+        {
+            assert_eq!(filename.to_str(), Some("filename.ext"));
+        } else {
+            panic!("Wrong output");
+        }
+    }
+
+    #[test]
+    fn filedesc_compressed_double_compress() {
+        if let Ok(FileDesc::Filename(filename)) =
+            FileDesc::compressed(Path::new("filename.ext"), OsStr::new("ext"), false)
+        {
+            assert_eq!(filename.to_str(), Some("filename.ext.ext"));
+        } else {
+            panic!("Wrong output");
+        }
+    }
 }

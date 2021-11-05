@@ -22,8 +22,23 @@ use std::io::Write;
 ///     Ok(())
 /// }
 /// ```
+pub type Lz4BlockOutput<R> = Lz4BlockOutputBase<R, Context>;
+
+impl<W: Write> Lz4BlockOutput<W> {
+    /// Create a new [`Lz4BlockOutput`] with the default parameters.
+    ///
+    /// See [`Self::with_context()`]
+    #[inline]
+    pub fn new(w: W) -> Self {
+        Self::with_context(w, Context::default(), Self::default_block_size()).unwrap()
+    }
+}
+
+/// Wrapper around a [`Write`] object to compress data.
+///
+/// Use this struct only if you want to provide your own Compression implementation. Otherwise use the alias [`Lz4BlockOutput`].
 #[derive(Debug)]
-pub struct Lz4BlockOutput<W: Write + Sized, C: Compression> {
+pub struct Lz4BlockOutputBase<W: Write + Sized, C: Compression> {
     writer: W,
     compression: C,
     compression_level: CompressionLevel,
@@ -33,33 +48,22 @@ pub struct Lz4BlockOutput<W: Write + Sized, C: Compression> {
     checksum: Checksum,
 }
 
-impl<W: Write> Lz4BlockOutput<W, Context> {
-    /// Create a new [`Lz4BlockOutput`] with the default parameters.
-    ///
-    /// The block size is 65536B
-    ///
-    /// See [`Self::with_block_size()`]
-    pub fn new(w: W) -> Self {
-        Self::with_block_size(w, 1 << 16).unwrap()
+impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
+    /// Get the default block size: 65536B.
+    #[inline]
+    pub fn default_block_size() -> usize {
+        1 << 16
     }
 
-    /// Create a new [`Lz4BlockOutput`] with the default [`Compression`] implementation.
-    ///
-    /// See [`Self::with_context()`]
-    pub fn with_block_size(w: W, block_size: usize) -> std::io::Result<Self> {
-        Self::with_context(w, Context::default(), block_size)
-    }
-}
-
-impl<W: Write, C: Compression> Lz4BlockOutput<W, C> {
-    /// Create a new [`Lz4BlockOutput`] with the default checksum implementation which is compatible with the Java's default implementation.
+    /// Create a new [`Lz4BlockOutputBase`] with the default checksum implementation which is compatible with the Java's default implementation, including the missing 4 bits bug.
     ///
     /// See [`Self::with_checksum()`]
+    #[inline]
     pub fn with_context(w: W, c: C, block_size: usize) -> std::io::Result<Self> {
         Self::with_checksum(w, c, block_size, Lz4BlockHeader::default_checksum)
     }
 
-    /// Create a new [`Lz4BlockOutput`].
+    /// Create a new [`Lz4BlockOutputBase`].
     ///
     /// The `block_size` must be between `64` and `33554432` bytes.
     /// The checksum must return a [`u32`].
@@ -129,7 +133,7 @@ impl<W: Write, C: Compression> Lz4BlockOutput<W, C> {
             };
             let (compression_method, buf_to_write) =
                 if compressed_buf.len() < decompressed_buf.len() {
-                    (CompressionMethod::LZ4, compressed_buf)
+                    (CompressionMethod::Lz4, compressed_buf)
                 } else {
                     (CompressionMethod::Raw, decompressed_buf)
                 };
@@ -149,17 +153,17 @@ impl<W: Write, C: Compression> Lz4BlockOutput<W, C> {
     }
 }
 
-impl<W: Write, C: Compression> Write for Lz4BlockOutput<W, C> {
+impl<W: Write, C: Compression> Write for Lz4BlockOutputBase<W, C> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        Ok(Lz4BlockOutput::write(self, buf)?)
+        Ok(Self::write(self, buf)?)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        Ok(Lz4BlockOutput::flush(self)?)
+        Ok(Self::flush(self)?)
     }
 }
 
-impl<W: Write, C: Compression> Drop for Lz4BlockOutput<W, C> {
+impl<W: Write, C: Compression> Drop for Lz4BlockOutputBase<W, C> {
     fn drop(&mut self) {
         let _ = self.flush();
     }
@@ -167,7 +171,7 @@ impl<W: Write, C: Compression> Drop for Lz4BlockOutput<W, C> {
 
 #[cfg(test)]
 mod test_lz4_block_output {
-    use super::Lz4BlockOutput;
+    use super::{Context, Lz4BlockOutput};
     use crate::lz4_block_header::data::VALID_DATA;
 
     use std::io::Write;
@@ -175,14 +179,14 @@ mod test_lz4_block_output {
     #[test]
     fn write_empty() {
         let mut out = Vec::<u8>::new();
-        Lz4BlockOutput::with_block_size(&mut out, 128).unwrap();
+        Lz4BlockOutput::with_context(&mut out, Context::default(), 128).unwrap();
         assert_eq!(out, []);
     }
 
     #[test]
     fn write_basic() {
         let mut out = Vec::<u8>::new();
-        Lz4BlockOutput::with_block_size(&mut out, 128)
+        Lz4BlockOutput::with_context(&mut out, Context::default(), 128)
             .unwrap()
             .write_all("...".as_bytes())
             .unwrap();
@@ -195,7 +199,9 @@ mod test_lz4_block_output {
         let buf = ['.' as u8; 1024];
         let loops = 1024;
         {
-            let mut writer = Lz4BlockOutput::with_block_size(&mut out, buf.len() * loops).unwrap();
+            let mut writer =
+                Lz4BlockOutput::with_context(&mut out, Context::default(), buf.len() * loops)
+                    .unwrap();
             for _ in 0..loops {
                 writer.write_all(&buf).unwrap();
             }
@@ -216,7 +222,8 @@ mod test_lz4_block_output {
         let buf = ['.' as u8; 128];
         let loops = 1234;
         {
-            let mut writer = Lz4BlockOutput::with_block_size(&mut out, buf.len()).unwrap();
+            let mut writer =
+                Lz4BlockOutput::with_context(&mut out, Context::default(), buf.len()).unwrap();
             for _ in 0..loops {
                 writer.write_all(&buf).unwrap();
             }
@@ -235,7 +242,8 @@ mod test_lz4_block_output {
     fn flush_basic() {
         let mut out = Vec::<u8>::new();
         {
-            let mut writer = Lz4BlockOutput::with_block_size(&mut out, 128).unwrap();
+            let mut writer =
+                Lz4BlockOutput::with_context(&mut out, Context::default(), 128).unwrap();
             writer.write_all("...".as_bytes()).unwrap();
             writer.flush().unwrap();
             writer.write_all("...".as_bytes()).unwrap();

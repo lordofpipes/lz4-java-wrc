@@ -18,10 +18,9 @@ impl<R: Read> ReadCounter<R> {
 impl<R: Read> Read for ReadCounter<R> {
     fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
         let res = self.read.read(buf);
-        self.sum += match res {
-            Ok(s) => s as u64,
-            _ => 0,
-        };
+        if let Ok(s) = res {
+            self.sum += s as u64;
+        }
         res
     }
 }

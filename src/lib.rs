@@ -20,7 +20,7 @@
 //!     Lz4BlockOutput::new(&mut compressed).write_all(d.as_bytes())?;
 //!     Ok(compressed)
 //! }
-//! fn decompress(r: &mut dyn Read) -> Result<String> {
+//! fn decompress(r: &[u8]) -> Result<String> {
 //!     let mut decompressed = String::new();
 //!     Lz4BlockInput::new(r).read_to_string(&mut decompressed)?;
 //!     Ok(decompressed)
@@ -31,11 +31,19 @@
 //!     let compressed = compress("Hello World!")?;
 //!
 //!     // decompress back into the original value
-//!     let decompressed = decompress(&mut compressed.as_slice())?;
+//!     let decompressed = decompress(compressed.as_slice())?;
 //!     println!("{}", decompressed);
 //!     Ok(())
 //! }
 //! ```
+//!
+//! # Feature Flags
+//!
+//! - `use_lz4_flex`: use `lz4_flex` as lz4 compression library (enabled by default)
+//! - `use_lz4-sys`: use `lz4-sys` as lz4 compression library (disabled by default)
+//!
+//! When compiling with one of the lz4 compression library, it is used by default.
+//! When compiling with both of them, one can choose with the [`Context`] enum.
 
 mod common;
 mod compression;
@@ -44,5 +52,5 @@ mod lz4_block_input;
 mod lz4_block_output;
 
 pub use compression::{Compression, Context};
-pub use lz4_block_input::Lz4BlockInput;
-pub use lz4_block_output::Lz4BlockOutput;
+pub use lz4_block_input::{Lz4BlockInput, Lz4BlockInputBase};
+pub use lz4_block_output::{Lz4BlockOutput, Lz4BlockOutputBase};

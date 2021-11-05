@@ -27,8 +27,22 @@ use std::io::Read;
 ///     Ok(())
 /// }
 /// ```
+pub type Lz4BlockInput<R> = Lz4BlockInputBase<R, Context>;
+
+impl<R: Read> Lz4BlockInput<R> {
+    /// Create a new [`Lz4BlockInput`] with the default [`Compression`] implementation.
+    ///
+    /// See [`Self::with_context()`]
+    pub fn new(r: R) -> Self {
+        Self::with_context(r, Context::default())
+    }
+}
+
+/// Wrapper around a [`Read`] object to decompress data.
+///
+/// Use this struct only if you want to provide your own Compression implementation. Otherwise use the alias [`Lz4BlockInput`].
 #[derive(Debug)]
-pub struct Lz4BlockInput<R: Read + Sized, C: Compression> {
+pub struct Lz4BlockInputBase<R: Read + Sized, C: Compression> {
     reader: R,
     compression: C,
     compressed_buf: Vec<u8>,
@@ -38,26 +52,15 @@ pub struct Lz4BlockInput<R: Read + Sized, C: Compression> {
     stop_on_empty_block: bool,
 }
 
-impl<R: Read> Lz4BlockInput<R, Context> {
-    /// Create a new [`Lz4BlockInput`] with the default [`Compression`] implementation.
-    ///
-    /// See [`Self::with_context()`]
-    pub fn new(r: R) -> Self {
-        Self::with_context(r, Context::default())
-    }
-}
-
-impl<R: Read, C: Compression> Lz4BlockInput<R, C> {
-    /// Create a new [`Lz4BlockInput`] with the default checksum implementation which matches the Java's default implementation.
-    ///
-    ///
+impl<R: Read, C: Compression> Lz4BlockInputBase<R, C> {
+    /// Create a new [`Lz4BlockInputBase`] with the default checksum implementation which matches the Java's default implementation, including the missing 4 bits bug.
     ///
     /// See [`Self::with_checksum()`]
     pub fn with_context(r: R, c: C) -> Self {
         Self::with_checksum(r, c, Lz4BlockHeader::default_checksum, true)
     }
 
-    /// Create a new [`Lz4BlockInput`].
+    /// Create a new [`Lz4BlockInputBase`].
     ///
     /// The checksum must return a [`u32`].
     pub fn with_checksum(
@@ -107,7 +110,7 @@ impl<R: Read, C: Compression> Lz4BlockInput<R, C> {
 
             match header.compression_method {
                 CompressionMethod::Raw => self.reader.read_exact(self.decompressed_buf.as_mut())?,
-                CompressionMethod::LZ4 => {
+                CompressionMethod::Lz4 => {
                     ensure_vec(
                         &mut self.compressed_buf,
                         self.compression.get_maximum_compressed_buffer_len(
@@ -153,9 +156,9 @@ fn ensure_vec(v: &mut Vec<u8>, max_block_size: usize, desired_len: u32) {
     v.resize_with(desired_len as usize, u8::default);
 }
 
-impl<R: Read, C: Compression> Read for Lz4BlockInput<R, C> {
+impl<R: Read, C: Compression> Read for Lz4BlockInputBase<R, C> {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        Ok(Lz4BlockInput::read(self, buf)?)
+        Ok(Self::read(self, buf)?)
     }
 }
 
