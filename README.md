@@ -18,7 +18,7 @@ Add this to your Cargo.toml:
 
 ```toml
 [dependencies]
-lz4lb = "0.1.0"
+lz4jb = "0.1.0"
 ```
 
 ### Compression
