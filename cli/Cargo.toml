@@ -13,7 +13,7 @@ This is not compatible with the standard LZ4 Block format.
 
 [dependencies]
 atty = "0.2"
-clap = "2"
+clap = { version = "4", features = ["cargo"] }
 
 [dependencies.lz4jb]
 path = ".."

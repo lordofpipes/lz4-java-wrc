@@ -93,10 +93,10 @@ mod lz4_flex {
     use crate::common::Lz4Error;
 
     pub(crate) fn compress(input: &[u8], output: &mut [u8]) -> Result<usize, Lz4Error> {
-        Ok(compress_into(input, output, 0)?)
+        Ok(compress_into(input, output)?)
     }
     pub(crate) fn decompress(input: &[u8], output: &mut [u8]) -> Result<usize, Lz4Error> {
-        Ok(decompress_into(input, output, 0)?)
+        Ok(decompress_into(input, output)?)
     }
     pub(crate) fn get_maximum_compressed_buffer_len(decompressed_len: usize) -> usize {
         get_maximum_output_size(decompressed_len)

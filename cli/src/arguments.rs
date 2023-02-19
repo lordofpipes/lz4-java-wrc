@@ -1,7 +1,7 @@
-use clap::{App, Arg};
+use clap::{arg, command, value_parser, ArgAction};
 use lz4jb::Context as Lz4Context;
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
@@ -120,7 +120,7 @@ pub(crate) struct Arguments {
     pub(crate) lz4jb_context: Lz4Context,
 }
 
-fn get_library(name: &str) -> Option<Lz4Context> {
+fn get_library(name: &String) -> Option<Lz4Context> {
     AVAILABLE_LIBRARIES
         .iter()
         .find(|t| name == t.0)
@@ -138,148 +138,102 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
             .collect::<Vec<_>>()
             .join("\n")
     );
-    let app = App::new("lz4jb")
+    let matches = command!("lz4jb")
         .version(clap::crate_version!())
         .about(clap::crate_description!())
         .arg(
-            Arg::with_name("compress")
-                .short("z")
-                .long("compress")
+            arg!(-z --compress "Compress. This is the default operation mode.")
                 .conflicts_with_all(&["decompress", "list", "test"])
-                .help("Compress. This is the default operation mode.")
                 .display_order(1),
         )
         .arg(
-            Arg::with_name("decompress")
-                .short("d")
-                .long("decompress")
+            arg!(-d --decompress "Decompress.")
                 .visible_alias("uncompress")
                 .conflicts_with_all(&["compress", "list", "test"])
-                .help("Decompress.")
                 .display_order(1),
         )
         .arg(
-            Arg::with_name("list")
-                .short("l")
-                .long("list")
+            arg!(-l --list "List compressed file contents.")
                 .conflicts_with_all(&["compress", "decompress", "test"])
-                .help("List compressed file contents.")
                 .display_order(1),
         )
         .arg(
-            Arg::with_name("test")
-                .short("t")
-                .long("test")
+            arg!(-t --test "Test the integrity of compressed files.")
                 .conflicts_with_all(&["compress", "decompress", "list"])
-                .help("Test the integrity of compressed files.")
                 .display_order(1),
         )
         .arg(
-            Arg::with_name("stdout")
-                .short("c")
-                .long("stdout")
+            arg!(-c --stdout "Write output on standard output; keep original files unchanged.")
                 .conflicts_with_all(&["list", "test"])
-                .help("Write output on standard output; keep original files unchanged.")
                 .display_order(100),
         )
         .arg(
-            Arg::with_name("keep")
-                .short("k")
-                .long("keep")
+            arg!(-k --keep "Keep (don't delete) input files during compression or decompression.")
                 .conflicts_with_all(&["list", "test"])
-                .help("Keep (don't delete) input files during compression or decompression.")
                 .display_order(100),
         )
         .arg(
-            Arg::with_name("force")
-                .short("f")
-                .long("force")
+            arg!(-f --force "Force the compression or decompression.")
                 .conflicts_with_all(&["list", "test"])
-                .help("Force the compression or decompression.")
                 .display_order(100),
         )
         .arg(
-            Arg::with_name("extension")
-                .short("E")
-                .long("extension")
-                .takes_value(true)
+            arg!(-E --extension <VALUE> "Append this extension instead of the default lz4 for compression.")
                 .conflicts_with_all(&["list", "test"])
-                .help("Append this extension instead of the default lz4 for compression.")
                 .display_order(100),
         )
         .arg(
-            Arg::with_name("blocksize")
-                .short("b")
-                .long("blocksize")
-                .takes_value(true)
+            arg!(-b --blocksize <VALUE> "Block size for compression in bytes (between 64 and 33554432).")
                 .conflicts_with_all(&["decompress", "list", "test"])
-                .help("Block size for compression in bytes (between 64 and 33554432).")
                 .display_order(100),
         )
         .arg(
-            Arg::with_name("library")
-                .short("L")
-                .long("library")
-                .takes_value(true)
-                .help("Use an alternative library. See --help for the list of available libraries.")
-                .long_help(library_long_help.as_str())
-                .validator(|v| {
-                    get_library(v.as_str()).map(|_| ()).ok_or(format!(
-                        "library {} is not available.\nAvailable values: {}",
-                        v,
-                        AVAILABLE_LIBRARIES
-                            .iter()
-                            .filter(|t| t.1.is_some())
-                            .map(|t| t.0)
-                            .collect::<Vec<&str>>()
-                            .join(", ")
-                    ))
-                }),
+            arg!(-L --library <VALUE> "Use an alternative library. See --help for more information.")
+                .long_help(library_long_help)
+                .value_parser(AVAILABLE_LIBRARIES
+                    .iter()
+                    .filter(|t| t.1.is_some())
+                    .map(|t| t.0)
+                    .collect::<Vec<&str>>())
         )
         .arg(
-            Arg::with_name("file")
-                .help("Sets the input file to use.")
+            arg!([file] "Sets the input file to use.")
+                .value_parser(value_parser!(PathBuf))
                 .long_help("Sets the input files to use. By default read from stdin and write to stdout.\nThe output file is determined this way:\n - <file>.<extension> when compressing\n - <file> with the .<extension> removed when decompressing")
-                .multiple(true),
-        );
-
-    let matches = app.get_matches();
+                .action(ArgAction::Append),
+        )
+        .get_matches();
 
     let mode = match (
-        matches.is_present("compress"),
-        matches.is_present("decompress"),
-        matches.is_present("list"),
-        matches.is_present("test"),
+        matches.get_flag("compress"),
+        matches.get_flag("decompress"),
+        matches.get_flag("list"),
+        matches.get_flag("test"),
     ) {
         (_, false, false, false) => Mode::Compress {
-            block_size: match matches
-                .value_of("blocksize")
-                .map(str::parse::<usize>)
-                .transpose()
-            {
-                Ok(b) => b,
-                Err(_) => return Err("could not parse blocksize"),
-            },
+            block_size: matches.get_one::<usize>("blocksize").cloned(),
         },
         (false, true, false, false) => Mode::Decompress,
         (false, false, true, false) => Mode::List,
         (false, false, false, true) => Mode::Test,
-        _ => return Err(
+        (a, b, c, d) => {
+            println!("{} {} {} {}", a, b, c, d);
+            return Err(
             "Maximum 1 amongst the following arguments: --compress, --decompress, --list, --test",
-        ),
+        );
+        }
     };
 
     let extension = matches
-        .value_of_os("extension")
+        .get_one::<OsString>("extension")
+        .map(|ext| ext.as_ref())
         .unwrap_or_else(|| OsStr::new(DEFAULT_EXTENSION));
-    let to_stdout = matches.is_present("stdout");
-    let keep_input = matches.is_present("keep");
-    let force = matches.is_present("force");
+    let to_stdout = matches.get_flag("stdout");
+    let keep_input = matches.get_flag("keep");
+    let force = matches.get_flag("force");
     let files = matches
-        .values_of_os("file")
-        .into_iter()
-        .flatten()
-        .map(Path::new)
+        .get_many::<PathBuf>("file")
+        .unwrap_or_default()
         .map(|f| {
             Ok(Files {
                 file_in: FileDesc::Filename(f.into()),
@@ -294,7 +248,7 @@ pub(crate) fn parse_cli() -> Result<Arguments, &'static str> {
         })
         .collect::<Result<Vec<_>, _>>()?;
     let lz4jb_context = matches
-        .value_of("library")
+        .get_one::<String>("library")
         .map(get_library)
         .flatten()
         .unwrap_or_default();
