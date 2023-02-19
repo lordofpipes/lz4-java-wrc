@@ -1,4 +1,4 @@
-use crate::common::{Checksum, ErrorCorruptedStream, Result};
+use crate::common::{Checksum, ErrorChecksum, ErrorLz4WrongDecompressedSize, Result};
 use crate::compression::{Compression, Context};
 use crate::lz4_block_header::{CompressionMethod, Lz4BlockHeader};
 
@@ -80,7 +80,7 @@ impl<R: Read, C: Compression> Lz4BlockInputBase<R, C> {
         }
     }
 
-    fn read_header(&mut self) -> std::io::Result<Option<Lz4BlockHeader>> {
+    fn read_header(&mut self) -> Result<Option<Lz4BlockHeader>> {
         Ok(loop {
             match Lz4BlockHeader::read(&mut self.reader)? {
                 None => break None,
@@ -125,7 +125,10 @@ impl<R: Read, C: Compression> Lz4BlockInputBase<R, C> {
                     {
                         Ok(s) => {
                             if s != self.decompressed_buf.len() {
-                                return ErrorCorruptedStream::new_error();
+                                return ErrorLz4WrongDecompressedSize::new_error(
+                                    s,
+                                    self.decompressed_buf.len(),
+                                );
                             }
                         }
                         Err(err) => {
@@ -134,8 +137,9 @@ impl<R: Read, C: Compression> Lz4BlockInputBase<R, C> {
                     };
                 }
             }
-            if self.checksum.run(self.decompressed_buf.as_ref()) != header.checksum {
-                return ErrorCorruptedStream::new_error();
+            let computed_checksum = self.checksum.run(self.decompressed_buf.as_ref());
+            if computed_checksum != header.checksum {
+                return ErrorChecksum::new_error(header.checksum, computed_checksum);
             }
             self.read_ptr = 0;
         }

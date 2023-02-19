@@ -1,4 +1,4 @@
-use std::io::{Read, Result};
+use std::io::Read;
 
 pub(crate) struct ReadCounter<R: Read> {
     read: R,
@@ -16,7 +16,7 @@ impl<R: Read> ReadCounter<R> {
 }
 
 impl<R: Read> Read for ReadCounter<R> {
-    fn read(&mut self, buf: &mut [u8]) -> Result<usize> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let res = self.read.read(buf);
         if let Ok(s) = res {
             self.sum += s as u64;

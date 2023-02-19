@@ -1,10 +1,14 @@
-use crate::common::{ErrorCorruptedStream, ErrorWrongBlockSize, IoErrorKind};
+use crate::common::{
+    ErrorChecksum, ErrorCompressedSizeTooBig, ErrorCompressionMethod, ErrorDecompressedSizeTooBig,
+    ErrorIncoherentSize, ErrorMagicNumber, ErrorNoCompressionDifferentSize, ErrorWrongBlockSize,
+    IoErrorKind, Result,
+};
 
 use twox_hash::XxHash32;
 
 use std::convert::TryInto;
 use std::hash::Hasher;
-use std::io::{Read, Result, Write};
+use std::io::{Read, Write};
 use std::ops::Range;
 use std::result::Result as StdResult;
 
@@ -66,29 +70,36 @@ impl Lz4BlockHeader {
             return if matches!(err.kind(), IoErrorKind::UnexpectedEof) {
                 Ok(None)
             } else {
-                Err(err)
+                Err(err.into())
             };
         }
-        let magic = &header[MAGIC_HEADER_RANGE];
-        if magic != MAGIC_HEADER {
-            return ErrorCorruptedStream::new_error();
-        }
+        Self::check_magic_header(&header)?;
         let compression_method = CompressionMethod::from_token(header[TOKEN_INDEX])?;
         let compression_level = CompressionLevel::from_token(header[TOKEN_INDEX]);
         let compressed_len = u32::from_le_bytes(header[COMPRESSED_LEN_RANGE].try_into().unwrap());
         let decompressed_len =
             u32::from_le_bytes(header[DECOMPRESSED_LEN_RANGE].try_into().unwrap());
         let checksum = u32::from_le_bytes(header[CHECKSUM_RANGE].try_into().unwrap());
-        if decompressed_len > compression_level.get_max_decompressed_buffer_len() as u32
-            || compressed_len > i32::MAX as u32 // java uses signed int
-            || ((compressed_len == 0) != (decompressed_len == 0))
-            || (matches!(compression_method, CompressionMethod::Raw)
-                && compressed_len != decompressed_len)
+        if decompressed_len > compression_level.get_max_decompressed_buffer_len() as u32 {
+            return ErrorDecompressedSizeTooBig::new_error(
+                decompressed_len,
+                compression_level.get_max_decompressed_buffer_len(),
+            );
+        }
+        if compressed_len > i32::MAX as u32 {
+            // java uses signed integers
+            return ErrorCompressedSizeTooBig::new_error(compressed_len, i32::MAX as u32);
+        }
+        if (compressed_len == 0) != (decompressed_len == 0) {
+            return ErrorIncoherentSize::new_error(decompressed_len, compressed_len);
+        }
+        if matches!(compression_method, CompressionMethod::Raw)
+            && compressed_len != decompressed_len
         {
-            return ErrorCorruptedStream::new_error();
+            return ErrorNoCompressionDifferentSize::new_error(compressed_len, decompressed_len);
         }
         if compressed_len == 0 && decompressed_len == 0 && checksum != 0 {
-            return ErrorCorruptedStream::new_error();
+            return ErrorChecksum::new_error(checksum, 0);
         }
         Ok(Some(Self {
             compression_method,
@@ -106,7 +117,18 @@ impl Lz4BlockHeader {
         buf[COMPRESSED_LEN_RANGE].clone_from_slice(&(self.compressed_len).to_le_bytes());
         buf[DECOMPRESSED_LEN_RANGE].clone_from_slice(&(self.decompressed_len).to_le_bytes());
         buf[CHECKSUM_RANGE].clone_from_slice(&(self.checksum).to_le_bytes());
-        writer.write(&buf)
+        Ok(writer.write(&buf)?)
+    }
+
+    fn check_magic_header(header: &[u8; HEADER_LENGTH]) -> StdResult<(), ErrorMagicNumber> {
+        let magic = &header[MAGIC_HEADER_RANGE];
+        if magic != MAGIC_HEADER {
+            return ErrorMagicNumber::new_error(
+                u64::from_be_bytes(*MAGIC_HEADER),
+                u64::from_be_bytes(magic.try_into().unwrap()),
+            );
+        }
+        Ok(())
     }
 }
 
@@ -158,12 +180,12 @@ pub(crate) enum CompressionMethod {
 }
 
 impl CompressionMethod {
-    pub(crate) fn from_token(token: u8) -> StdResult<Self, ErrorCorruptedStream> {
+    pub(crate) fn from_token(token: u8) -> StdResult<Self, ErrorCompressionMethod> {
         let compression_method = (token as usize & 0xf0) >> 4;
         match compression_method {
             x if x == Self::Raw as usize => Ok(Self::Raw),
             x if x == Self::Lz4 as usize => Ok(Self::Lz4),
-            _ => Err(ErrorCorruptedStream::new()),
+            _ => ErrorCompressionMethod::new_error(token),
         }
     }
 

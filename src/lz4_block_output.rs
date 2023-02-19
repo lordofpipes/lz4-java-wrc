@@ -4,6 +4,7 @@ use crate::lz4_block_header::{CompressionLevel, CompressionMethod, Lz4BlockHeade
 
 use std::cmp::min;
 use std::io::Write;
+use std::result::Result as StdResult;
 
 /// Wrapper around a [`Write`] object to compress data.
 ///
@@ -91,7 +92,7 @@ impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
         })
     }
 
-    fn copy_to_buf(&mut self, buf: &[u8]) -> Result<usize> {
+    fn copy_to_buf(&mut self, buf: &[u8]) -> StdResult<usize, ErrorInternal> {
         let buf_into = &mut self.decompressed_buf[self.write_ptr..];
         if buf.len() > buf_into.len() {
             return ErrorInternal::new_error(
@@ -105,7 +106,7 @@ impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
         Ok(buf.len())
     }
 
-    fn remaining_buf_len(&self) -> Result<usize> {
+    fn remaining_buf_len(&self) -> StdResult<usize, ErrorInternal> {
         if self.write_ptr <= self.decompressed_buf.len() {
             Ok(self.decompressed_buf.len() - self.write_ptr)
         } else {
@@ -118,7 +119,7 @@ impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
             self.flush()?;
         }
         let size_to_copy = min(buf.len(), self.remaining_buf_len()?);
-        self.copy_to_buf(&buf[..size_to_copy])
+        Ok(self.copy_to_buf(&buf[..size_to_copy])?)
     }
 
     fn flush(&mut self) -> Result<()> {
@@ -171,10 +172,19 @@ impl<W: Write, C: Compression> Drop for Lz4BlockOutputBase<W, C> {
 
 #[cfg(test)]
 mod test_lz4_block_output {
-    use super::{Context, Lz4BlockOutput};
+    use super::{CompressionLevel, Context, Lz4BlockOutput};
     use crate::lz4_block_header::data::VALID_DATA;
 
     use std::io::Write;
+
+    #[test]
+    fn valid_default_block_size() {
+        let default_block_size = Lz4BlockOutput::<Vec<u8>>::default_block_size();
+        assert_eq!(
+            CompressionLevel::from_block_size(default_block_size).is_ok(),
+            true
+        );
+    }
 
     #[test]
     fn write_empty() {
