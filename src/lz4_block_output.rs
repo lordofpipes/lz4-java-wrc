@@ -13,7 +13,7 @@ use std::result::Result as StdResult;
 /// # Example
 ///
 /// ```rust
-/// use lz4jb::Lz4BlockOutput;
+/// use lz4_java_wrc::Lz4BlockOutput;
 /// use std::io::Write;
 ///
 /// fn main() -> std::io::Result<()> {
@@ -23,14 +23,14 @@ use std::result::Result as StdResult;
 ///     Ok(())
 /// }
 /// ```
-pub type Lz4BlockOutput<R> = Lz4BlockOutputBase<R, Context>;
+pub type Lz4BlockOutput<'a, R> = Lz4BlockOutputBase<'a, R, Context>;
 
-impl<W: Write> Lz4BlockOutput<W> {
+impl<'a, W: Write> Lz4BlockOutput<'a, W> {
     /// Create a new [`Lz4BlockOutput`] with the default parameters.
     ///
     /// See [`Self::with_context()`]
     #[inline]
-    pub fn new(w: W) -> Self {
+    pub fn new(w: &'a mut W) -> Self {
         Self::with_context(w, Context::default(), Self::default_block_size()).unwrap()
     }
 }
@@ -39,8 +39,8 @@ impl<W: Write> Lz4BlockOutput<W> {
 ///
 /// Use this struct only if you want to provide your own Compression implementation. Otherwise use the alias [`Lz4BlockOutput`].
 #[derive(Debug)]
-pub struct Lz4BlockOutputBase<W: Write + Sized, C: Compression> {
-    writer: W,
+pub struct Lz4BlockOutputBase<'a, W: Write + Sized, C: Compression> {
+    writer: &'a mut W,
     compression: C,
     compression_level: CompressionLevel,
     write_ptr: usize,
@@ -49,7 +49,7 @@ pub struct Lz4BlockOutputBase<W: Write + Sized, C: Compression> {
     checksum: Checksum,
 }
 
-impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
+impl<'a, W: Write, C: Compression> Lz4BlockOutputBase<'a, W, C> {
     /// Get the default block size: 65536B.
     #[inline]
     pub fn default_block_size() -> usize {
@@ -60,7 +60,7 @@ impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
     ///
     /// See [`Self::with_checksum()`]
     #[inline]
-    pub fn with_context(w: W, c: C, block_size: usize) -> std::io::Result<Self> {
+    pub fn with_context(w: &'a mut W, c: C, block_size: usize) -> std::io::Result<Self> {
         Self::with_checksum(w, c, block_size, Lz4BlockHeader::default_checksum)
     }
 
@@ -73,7 +73,7 @@ impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
     ///
     /// It will return an error if the `block_size` is out of range
     pub fn with_checksum(
-        w: W,
+        w: &'a mut W,
         c: C,
         block_size: usize,
         checksum: fn(&[u8]) -> u32,
@@ -154,7 +154,7 @@ impl<W: Write, C: Compression> Lz4BlockOutputBase<W, C> {
     }
 }
 
-impl<W: Write, C: Compression> Write for Lz4BlockOutputBase<W, C> {
+impl<'a, W: Write, C: Compression> Write for Lz4BlockOutputBase<'a, W, C> {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         Ok(Self::write(self, buf)?)
     }
@@ -164,7 +164,7 @@ impl<W: Write, C: Compression> Write for Lz4BlockOutputBase<W, C> {
     }
 }
 
-impl<W: Write, C: Compression> Drop for Lz4BlockOutputBase<W, C> {
+impl<'a, W: Write, C: Compression> Drop for Lz4BlockOutputBase<'a, W, C> {
     fn drop(&mut self) {
         let _ = self.flush();
     }

@@ -12,7 +12,7 @@ use std::io::Read;
 /// # Example
 ///
 /// ```rust
-/// use lz4jb::Lz4BlockInput;
+/// use lz4_java_wrc::Lz4BlockInput;
 /// use std::io::Read;
 ///
 /// // &[u8] implements the Read trait

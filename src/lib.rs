@@ -12,7 +12,7 @@
 //! # Example
 //!
 //! ```rust
-//! use lz4jb::{Lz4BlockInput, Lz4BlockOutput};
+//! use lz4_java_wrc::{Lz4BlockInput, Lz4BlockOutput};
 //! use std::io::{Read, Result, Write};
 //!
 //! fn compress(d: &str) -> Result<Vec<u8>> {
